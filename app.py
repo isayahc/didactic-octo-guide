@@ -1,5 +1,4 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
-import time
 import gradio as gr
 import torch
 
@@ -7,32 +6,43 @@ import torch
 tok = AutoTokenizer.from_pretrained("gpt2")
 model = AutoModelForCausalLM.from_pretrained("gpt2")
 
-def generate_response(history):
-    input_text = ' '.join(history)
-    inputs = tok(input_text, return_tensors="pt")
-    outputs = model.generate(**inputs, max_new_tokens=50, pad_token_id=tok.eos_token_id)
-    response = tok.decode(outputs[0], skip_special_tokens=True)
-    return response.split(input_text)[-1].strip()  # Extract only the generated part
+def stream_response(input_text: str):
+    # Encode the input text
+    input_ids = tok.encode(input_text, return_tensors="pt")
+    
+    # Generate response in a streaming fashion
+    chatbot_output = model.generate(
+        input_ids,
+        max_length=1000,
+        pad_token_id=tok.eos_token_id,
+        do_sample=True
+    )
+    
+    response_text = tok.decode(chatbot_output[:, input_ids.shape[-1]:][0], skip_special_tokens=True)
+    return response_text
 
 with gr.Blocks() as demo:
     chatbot = gr.Chatbot()
-    msg = gr.Textbox()
+    msg = gr.Textbox(label="Your Message")
     clear = gr.Button("Clear")
 
     def user(user_message: str, history: list):
         return "", history + [[user_message, None]]
 
     def bot(history: list):
-        bot_message = generate_response([h[0] for h in history])
-        history[-1][1] = bot_message
-        time.sleep(0.05)  # simulate typing delay
-        return history
+        input_text = ' '.join([h[0] for h in history if h[0]])  # Join all user messages
+        response = stream_response(input_text)
+        for char in response:
+            if history[-1][1] is None:
+                history[-1][1] = char
+            else:
+                history[-1][1] += char
+            yield history
+            # Use time.sleep(0.1) if you want to simulate typing delay
 
-    msg.submit(user, inputs=[msg, chatbot], outputs=[msg, chatbot], queue=False).then(
+    msg.submit(user, inputs=[msg, chatbot], outputs=[msg, chatbot]).then(
         bot, inputs=chatbot, outputs=chatbot
     )
-    clear.click(lambda: None, None, chatbot, queue=False)
+    clear.click(lambda: None, None, chatbot)
     
-demo.queue()
-if __name__ == "__main__":
-    demo.launch()
+demo.launch()
